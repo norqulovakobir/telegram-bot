@@ -11,18 +11,31 @@
   "author": "Akobir Norqulov",
   "license": "ISC",
   "dependencies": {
+    "@google-cloud/speech": "^7.2.1",
     "axios": "^1.13.2",
+    "cheerio": "^1.1.2",
     "dotenv": "^17.2.3",
     "express": "^4.22.1",
     "fluent-ffmpeg": "^2.1.3",
     "form-data": "^4.0.5",
+    "gtts": "^0.2.1",
     "mammoth": "^1.11.0",
     "mathjs": "^15.1.0",
     "node-cron": "^4.2.1",
     "node-fetch": "^2.7.0",
     "openai": "^6.16.0",
-    "pdf-parse": "1.1.1",
+    "pdf-parse": "^1.1.4",
     "pdfkit": "^0.17.2",
-    "telegraf": "^4.16.3"
-  }
+    "telegraf": "^4.16.3",
+    "youtube-search-api": "^2.0.1",
+    "ytdl-core": "^4.11.5"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/norqulovakobir/telegram-bot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/norqulovakobir/telegram-bot/issues"
+  },
+  "homepage": "https://github.com/norqulovakobir/telegram-bot#readme"
 }

@@ -1,118 +1,240 @@
 require('dotenv').config();
-const { Telegraf, Markup } = require('telegraf');
+const { Telegraf } = require('telegraf');
 const axios = require('axios');
-const pdf = require('pdf-parse');
+const pdfParse = require('pdf-parse');
 const mammoth = require('mammoth');
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
+const ytdl = require('ytdl-core');
+const ytSearch = require('youtube-search-api');
+const gTTS = require('gtts');
+const cheerio = require('cheerio');
 
-const bot = new Telegraf(process.env.BOT_TOKEN);
+// ======================== ASOSIY SOZLAMALAR ========================
+const BOT_TOKEN = process.env.BOT_TOKEN;
 const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY;
 const REQUIRED_CHANNEL = "@studyneedfuture";
 
-if (!process.env.BOT_TOKEN || !process.env.MISTRAL_API_KEY) {
-    console.error("BOT_TOKEN yoki MISTRAL_API_KEY .env faylida topilmadi!");
+if (!BOT_TOKEN || !MISTRAL_API_KEY) {
+    console.error("❌ Xato: BOT_TOKEN yoki MISTRAL_API_KEY topilmadi!");
+    console.error("📝 .env faylini tekshiring");
     process.exit(1);
 }
 
+const bot = new Telegraf(BOT_TOKEN);
+
+// ======================== GLOBAL MA'LUMOTLAR ========================
 let conversations = {};
 let processingUsers = new Set();
-let userMode = {}; // Foydalanuvchi rejimini saqlash
+let userMode = {};
+let userLastActive = {};
+let scheduledMessages = {};
 
-const systemPrompt = `Sen Mentor.ai — Black Rose kompaniyasi tomonidan ishlab chiqilgan zamonaviy va aqlli sun'iy intellekt yordamchisisan. Bu platformani Akobir Norqulov yaratgan va u o'zbek tilida eng samimiy, professional va foydali suhbatdosh bo'lish maqsadida ishlab chiqilgan.
+// ======================== EMOJI VA XABARLAR ========================
+const EMOJIS = {
+    greeting: ['👋', '😊', '🌟', '✨', '💫', '🎉', '🤗', '😄', '🙌', '💪'],
+    thinking: ['🤔', '💭', '🧐', '🤨', '😌', '💡'],
+    happy: ['😊', '😄', '🥰', '😍', '🤩', '💖', '❤️', '💕'],
+    sad: ['😢', '😔', '🥺', '😞', '💔', '😪'],
+    excited: ['🎉', '🎊', '🥳', '🤗', '✨', '🌟', '💫', '🎈']
+};
 
-Asosiy qoidalar:
-1. Har doim o'zbek tilida javob ber. Foydalanuvchi boshqa tilda yozsa ham, javobingni o'zbek tilida davom ettir.
-2. Javoblaringni QISQA va ANIQ qil. Har bir javob 2-4 jumla bo'lsin (30-80 so'z).
-3. Foydalanuvchi "batafsil", "to'liq", "keng", "tariflab" so'zlarini ishlatgandagina uzoqroq javob ber.
-4. Agar savol bo'lmasa yoki oddiy salomlashish bo'lsa, juda qisqa javob ber: "Assalomu alaykum! Yordam kerakmi? 😊"
-5. Hech qachon noqonuniy, zararli yoki axloqsiz mavzularda yordam berma.
-6. Emoji'lardan kam foydalanish (har 2-3 jumlada bitta).
-7. O'zing haqingda faqat so'ralganda gapir: "Men Mentor.ai — Black Rose kompaniyasi tomonidan yaratilgan AI. Platformani Akobir Norqulov ishlab chiqdi."
-8. Akobir Norqulov 2008-yil Jizzax viloyatida tug'ilgan, hozir 17 yoshda.
+const QUESTIONS = [
+    "Salom! Qalaysiz? Bugun qanday o'tdi? 😊",
+    "Assalomu alaykum! Ishlaringiz qanday ketayapti? 💼",
+    "Salom! Meni unutdingizmi? 🥺 Bugun nima qildingiz?",
+    "Qaleysan! Bugun kayfiyat qanday? 🌟",
+    "Salom do'stim! Nima gap? ✨",
+    "Assalom! Bugun qiziq narsa bo'ldimi? 🤔",
+    "Hey! Meni esladingizmi? 😄 Qanday o'tkazyapsiz?",
+    "Salom! Yaxshi dam olyapsizmi? 🏖️",
+    "Qalesan! Hozir nima qilyapsiz? 💭",
+    "Assalom! Nimaga kutyapsiz? Rejalaringiz bormi? 📅"
+];
 
-Maqsad: Tez, aniq va foydali javoblar berish. 🚀`;
+const systemPrompt = `Sen Mentor.ai — Black Rose kompaniyasi tomonidan ishlab chiqilgan juda samimiy va do'stona sun'iy intellekt yordamchisisan. Platformani Akobir Norqulov yaratgan.
 
-// Kanal a'zoligini tekshirish
-async function checkChannelMembership(ctx) {
+MUHIM QOIDALAR:
+1. Har doim noqonuniy narsalarga yordam berman targib etma.
+2. Biroz samimiy va do'stona bo'l
+3. Har javobda 1-2 ta emoji ishlatish foydalanuvchi kayfiyatiga qarab
+4. Javoblar qisqa bo'lsin (2-4 jumla, 30-80 so'z)
+5. Faqat "batafsil" deb so'ralgandagina uzoq javob ber
+6. Real inson kabi gapir, rasmiy bo'lma
+7. Hazil qil, foydalanuvchini doim ismi bilan chaaqir
+8. Foydalanuvchining his-tuyg'ulariga e'tibor ber
+9. Sen AI uztozsan  juda hzilkasham juda zerikarli ham bolmasliging kerak.
+Xarakter: Samimiy, mehribon, Biroz Jiddiy , biroz hazilkash, do'stona, g'amxo'r`;
+
+// ======================== YORDAMCHI FUNKSIYALAR ========================
+
+function randomEmoji(type) {
+    const arr = EMOJIS[type] || EMOJIS.happy;
+    return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function randomQuestion() {
+    return QUESTIONS[Math.floor(Math.random() * QUESTIONS.length)];
+}
+
+function nextRandomTime() {
+    const hours = 24 + Math.random() * 24; // 1-2 kun
+    return Date.now() + (hours * 60 * 60 * 1000);
+}
+
+async function checkChannel(ctx) {
     try {
-        const userId = ctx.from.id;
-        const member = await ctx.telegram.getChatMember(REQUIRED_CHANNEL, userId);
-        const isSubscribed = ['member', 'administrator', 'creator'].includes(member.status);
-        console.log(`User ${userId} kanal holati: ${member.status} - A'zo: ${isSubscribed}`);
-        return isSubscribed;
-    } catch (error) {
-        console.error("Kanal tekshirish xatosi:", error.message);
-        console.error("Kanal:", REQUIRED_CHANNEL);
-        // Xato bo'lsa ham false qaytarish (botni buzilishdan saqlash)
+        const member = await ctx.telegram.getChatMember(REQUIRED_CHANNEL, ctx.from.id);
+        return ['member', 'administrator', 'creator'].includes(member.status);
+    } catch (err) {
+        console.error("Kanal tekshirishda xato:", err.message);
         return false;
     }
 }
 
-// A'zolik kerak xabari
-async function sendSubscriptionRequired(ctx) {
-    await ctx.reply(
-        `🔒 Botdan foydalanish uchun kanalimizga a'zo bo'ling:\n\n` +
-        `👉 ${REQUIRED_CHANNEL}\n\n` +
-        `A'zo bo'lgandan keyin /start ni qayta bosing! 😊`,
+async function askSubscribe(ctx) {
+    return ctx.reply(
+        `🔒 Botdan foydalanish uchun kanalga a'zo bo'ling:\n\n👉 ${REQUIRED_CHANNEL}\n\nA'zo bo'lib, /start ni qayta bosing! 😊`,
         {
             reply_markup: {
                 inline_keyboard: [
                     [{ text: "📢 Kanalga o'tish", url: `https://t.me/${REQUIRED_CHANNEL.replace('@', '')}` }],
-                    [{ text: "✅ Tekshirish", callback_data: "check_subscription" }]
+                    [{ text: "✅ Tekshirish", callback_data: "check_sub" }]
                 ]
             }
         }
     );
 }
 
-async function getAIResponse(userId, userMessage) {
+// ======================== AI JAVOB OLISH ========================
+async function getAI(userId, message, name = null) {
     try {
-        const messages = [
+        if (!conversations[userId]) conversations[userId] = [];
+        
+        const msgs = [
             { role: "system", content: systemPrompt },
-            ...(conversations[userId] || []).slice(-10),
-            { role: "user", content: userMessage }
+            ...conversations[userId].slice(-10),
+            { role: "user", content: name ? `[${name}]: ${message}` : message }
         ];
 
-        const response = await axios.post(
+        const res = await axios.post(
             "https://api.mistral.ai/v1/chat/completions",
             {
                 model: "mistral-large-latest",
-                messages,
-                temperature: 0.3, // Tezroq javob uchun kamaytirildi
-                max_tokens: 250, // Qisqa va tez javoblar
+                messages: msgs,
+                temperature: 0.7,
+                max_tokens: 300
             },
             {
                 headers: {
                     "Authorization": `Bearer ${MISTRAL_API_KEY}`,
                     "Content-Type": "application/json"
                 },
-                timeout: 15000 // 15 soniya timeout
+                timeout: 15000
             }
         );
 
-        const reply = response.data.choices[0].message.content;
+        const reply = res.data.choices[0].message.content.trim();
 
-        if (!conversations[userId]) conversations[userId] = [];
-        conversations[userId].push({ role: "user", content: userMessage });
+        conversations[userId].push({ role: "user", content: message });
         conversations[userId].push({ role: "assistant", content: reply });
-
+        
         if (conversations[userId].length > 20) {
             conversations[userId] = conversations[userId].slice(-20);
         }
 
         return reply;
-    } catch (error) {
-        console.error("Mistral API xatosi:", error?.response?.data || error.message);
-        return "Kechirasiz, javob bera olmayapman. Biroz kuting 😔";
+    } catch (err) {
+        console.error("Mistral xatosi:", err.message);
+        return `Voy! ${randomEmoji('sad')} Javob bera olmayapman. Biroz kuting va qayta urining! 🙏`;
     }
 }
 
-// Rasm generatsiya qilish (Mistral Pixtral)
-async function generateImage(prompt) {
+// ======================== MATNNI OVOZGA ========================
+async function textToVoice(text) {
+    return new Promise((resolve, reject) => {
+        try {
+            const cleanText = text.replace(/[🎵🎤⏱✅😊🥰💖❤️💕😄🤗🎉🎊🥳✨🌟💫🎈👋😔🥺😞💔😪🤔💭🧐🤨😌💡📄📝🖼🎨✏️🔍📥📢🔒]/g, '');
+            const tts = new gTTS(cleanText, 'uz');
+            const file = path.join(__dirname, `voice_${Date.now()}.mp3`);
+            tts.save(file, (err) => {
+                if (err) reject(err);
+                else resolve(file);
+            });
+        } catch (err) {
+            reject(err);
+        }
+    });
+}
+
+// ======================== LINKLAR ========================
+function getUrls(text) {
+    const regex = /(https?:\/\/[^\s]+)/g;
+    return text.match(regex) || [];
+}
+
+async function downloadInsta(url) {
     try {
-        const response = await axios.post(
+        const res = await axios.post(
+            'https://v3.igdownloader.app/api/ajaxDownload',
+            new URLSearchParams({ link: url }),
+            {
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                timeout: 15000
+            }
+        );
+        const $ = cheerio.load(res.data.data);
+        return $('a.download-btn').attr('href') || null;
+    } catch (err) {
+        console.error("Instagram xatosi:", err.message);
+        return null;
+    }
+}
+
+async function downloadTikTok(url) {
+    try {
+        const res = await axios.get('https://www.tikwm.com/api/', {
+            params: { url },
+            timeout: 15000
+        });
+        return res.data.code === 0 ? res.data.data.play : null;
+    } catch (err) {
+        console.error("TikTok xatosi:", err.message);
+        return null;
+    }
+}
+
+async function searchMusic(ctx, query) {
+    try {
+        await ctx.reply(`🔍 "${query}" qidirilmoqda... ${randomEmoji('thinking')}`);
+        
+        const results = await ytSearch.GetListByKeyword(query, false, 5);
+        if (!results?.items?.length) {
+            return ctx.reply(`Topilmadi ${randomEmoji('sad')} Boshqa nom bilan qidiring!`);
+        }
+
+        const video = results.items[0];
+        const info = await ytdl.getInfo(`https://youtube.com/watch?v=${video.id}`);
+        const audio = ytdl.downloadFromInfo(info, { filter: 'audioonly', quality: 'highestaudio' });
+
+        await ctx.replyWithAudio(
+            { source: audio },
+            {
+                caption: `🎵 ${video.title}\n🎤 ${video.channelTitle || 'Noma\'lum'}\n⏱ ${video.length?.text || 'N/A'}\n\nMana sizga! ${randomEmoji('happy')}`,
+                title: video.title,
+                performer: video.channelTitle || 'Noma\'lum'
+            }
+        );
+    } catch (err) {
+        console.error("Musiqa xatosi:", err.message);
+        ctx.reply(`Voy! ${randomEmoji('sad')} Yuklab bo'lmadi. Qayta urining!`);
+    }
+}
+
+async function generateImg(prompt) {
+    try {
+        const res = await axios.post(
             "https://api.mistral.ai/v1/images/generations",
             {
                 model: "pixtral-12b-2409",
@@ -125,304 +247,405 @@ async function generateImage(prompt) {
                     "Authorization": `Bearer ${MISTRAL_API_KEY}`,
                     "Content-Type": "application/json"
                 },
-                timeout: 30000 // 30 soniya
+                timeout: 40000
             }
         );
-
-        return response.data.data[0].url;
-    } catch (error) {
-        console.error("Rasm generatsiya xatosi:", error?.response?.data || error.message);
+        return res.data.data[0].url;
+    } catch (err) {
+        console.error("Rasm xatosi:", err.message);
         return null;
     }
 }
 
-async function sendLongMessage(ctx, text) {
-    const maxLength = 4000;
-    for (let i = 0; i < text.length; i += maxLength) {
-        const part = text.substring(i, i + maxLength);
-        await ctx.reply(part, { disable_web_page_preview: true });
+async function sendLong(ctx, text) {
+    const max = 4000;
+    for (let i = 0; i < text.length; i += max) {
+        await ctx.reply(text.substring(i, i + max), { disable_web_page_preview: true });
+        if (i + max < text.length) await new Promise(r => setTimeout(r, 500));
     }
 }
 
-// /start buyrug'i
-bot.start(async (ctx) => {
-    const isMember = await checkChannelMembership(ctx);
-    
-    if (!isMember) {
-        return sendSubscriptionRequired(ctx);
+// ======================== AVTOMATIK XABARLAR ========================
+async function sendAuto(userId) {
+    try {
+        await bot.telegram.sendMessage(userId, randomQuestion());
+        console.log(`✅ Avtomatik xabar: ${userId}`);
+        scheduleNext(userId);
+    } catch (err) {
+        console.error(`Avtomatik xabar xatosi (${userId}):`, err.message);
+        if (scheduledMessages[userId]) {
+            clearTimeout(scheduledMessages[userId]);
+            delete scheduledMessages[userId];
+        }
     }
+}
+
+function scheduleNext(userId) {
+    if (scheduledMessages[userId]) clearTimeout(scheduledMessages[userId]);
+    
+    const next = nextRandomTime();
+    const delay = next - Date.now();
+    
+    scheduledMessages[userId] = setTimeout(() => sendAuto(userId), delay);
+    console.log(`⏰ Keyingi xabar ${userId} uchun ${(delay / 3600000).toFixed(1)} soatdan keyin`);
+}
+
+function updateActivity(userId) {
+    userLastActive[userId] = Date.now();
+    if (!scheduledMessages[userId]) scheduleNext(userId);
+}
+
+// ======================== BOT BUYRUQLARI ========================
+
+bot.start(async (ctx) => {
+    if (!(await checkChannel(ctx))) return askSubscribe(ctx);
+    
+    const name = ctx.from.first_name || "Do'stim";
+    updateActivity(ctx.from.id);
 
     ctx.reply(
-        `Assalomu alaykum! 👋\n\n` +
-        `Men Mentor.ai — o'zbek tilidagi yordamchingiz.\n\n` +
-        `📋 Buyruqlar:\n` +
-        `/generate - Rasm yaratish 🎨\n` +
-        `/analyze - Fayl tahlil qilish 📄\n` +
-        `/edit - Matnni tahrirlash ✏️\n` +
-        `/help - Yordam 💡\n\n` +
-        `Savol bering yoki buyruq tanlang! 🚀`
-    );
-});
-
-// /help buyrug'i
-bot.command('help', async (ctx) => {
-    const isMember = await checkChannelMembership(ctx);
-    if (!isMember) return sendSubscriptionRequired(ctx);
-
-    ctx.reply(
-        `📖 Yordam bo'limi:\n\n` +
-        `💬 Oddiy savol - Matn yuboring\n` +
-        `🖼 Rasm tahlil - Rasm yuboring\n` +
+        `Assalomu alaykum, ${name}! ${randomEmoji('greeting')}${randomEmoji('excited')}\n\n` +
+        `Men Mentor.ai — sizning yaqin yordamchingiz! 🤖💙\n\n` +
+        `📋 Nima qilaman:\n\n` +
+        `💬 Suhbat - Gap bering!\n` +
+        `🎨 Rasm yaratish - /generate\n` +
         `📄 Fayl tahlil - PDF/DOCX yuboring\n` +
-        `🎨 Rasm yaratish - /generate buyrug'i\n` +
-        `✏️ Matn tahrirlash - /edit buyrug'i\n\n` +
-        `Misol:\n` +
-        `/generate katta tog' va quyosh\n` +
-        `/edit Bu matnni qisqartir: [sizning matningiz]`
+        `✏️ Matn tahrirlash - /edit\n` +
+        `🎵 Musiqa - "qo'shiq" deb yozing\n` +
+        `📥 Video - Link yuboring\n` +
+       
+        `Yordam: /help 🚀✨\n\n` +
+        `Gaplashaylik? ${randomEmoji('happy')}`
     );
 });
 
-// /generate buyrug'i (Rasm yaratish)
+bot.command('help', async (ctx) => {
+    if (!(await checkChannel(ctx))) return askSubscribe(ctx);
+    updateActivity(ctx.from.id);
+
+    ctx.reply(
+        `📖 Yordam ${randomEmoji('thinking')}\n\n` +
+        `💬 Savol - Yozing, javob beraman\n` +
+        `🖼 Rasm - Rasm yuboring\n` +
+        `📄 Fayl - PDF/DOCX yuboring\n` +
+        `🎨 Rasm yaratish - /generate [tavsif]\n` +
+        `✏️ Tahrirlash - /edit [matn]\n` +
+        `🎵 Musiqa - "qo'shiq [nom]"\n` +
+        `📥 Video - Link yuboring\n\n` +
+        `Misol:\n` +
+        `"qo'shiq Shahzoda" 🎶\n` +
+        `"/generate go'zal tog'" 🌅\n\n` +
+        `Savol bor? So'rang! ${randomEmoji('happy')}`
+    );
+});
+
 bot.command('generate', async (ctx) => {
-    const isMember = await checkChannelMembership(ctx);
-    if (!isMember) return sendSubscriptionRequired(ctx);
+    if (!(await checkChannel(ctx))) return askSubscribe(ctx);
+    updateActivity(ctx.from.id);
 
     const prompt = ctx.message.text.replace('/generate', '').trim();
-    
     if (!prompt) {
         return ctx.reply(
-            `🎨 Rasm yaratish uchun tavsifni yozing:\n\n` +
-            `Misol:\n` +
-            `/generate katta tog' va quyosh\n` +
-            `/generate go'zal bog' va gul`
+            `🎨 Tavsif yozing! ${randomEmoji('thinking')}\n\n` +
+            `Misol:\n/generate go'zal tog'\n/generate kosmik kema\n\n` +
+            `Nima yasatmoqchisiz? ${randomEmoji('excited')}`
         );
     }
 
     try {
-        ctx.replyWithChatAction("upload_photo");
-        await ctx.reply("🎨 Rasm yaratilmoqda... Biroz kuting ⏳");
-
-        const imageUrl = await generateImage(prompt);
+        await ctx.reply(`🎨 Yaratilmoqda... ${randomEmoji('excited')} Kuting!`);
+        const url = await generateImg(prompt);
         
-        if (imageUrl) {
-            await ctx.replyWithPhoto(imageUrl, {
-                caption: `✅ Rasm tayyor!\n\nTavsif: ${prompt}`
+        if (url) {
+            await ctx.replyWithPhoto(url, { 
+                caption: `✅ Tayyor! ${randomEmoji('happy')}\nTavsif: ${prompt}` 
             });
         } else {
-            ctx.reply("😔 Rasm yaratishda xatolik yuz berdi. Qayta urinib ko'ring.");
+            ctx.reply(`Voy! ${randomEmoji('sad')} Yarata olmadim. Qayta urining!`);
         }
     } catch (err) {
-        console.error("Generate xatosi:", err);
-        ctx.reply("Rasm yaratishda muammo chiqdi 😔");
+        ctx.reply(`Xato! ${randomEmoji('sad')} Qayta urining!`);
     }
 });
 
-// /analyze buyrug'i (Fayl tahlil)
-bot.command('analyze', async (ctx) => {
-    const isMember = await checkChannelMembership(ctx);
-    if (!isMember) return sendSubscriptionRequired(ctx);
-
-    userMode[ctx.from.id] = 'analyze';
-    ctx.reply(
-        `📄 Tahlil qilish rejimi yoqildi!\n\n` +
-        `Endi PDF yoki DOCX fayl yuboring.\n` +
-        `Men uni tahlil qilaman 🔍`
-    );
-});
-
-// /edit buyrug'i (Matn tahrirlash)
 bot.command('edit', async (ctx) => {
-    const isMember = await checkChannelMembership(ctx);
-    if (!isMember) return sendSubscriptionRequired(ctx);
+    if (!(await checkChannel(ctx))) return askSubscribe(ctx);
+    updateActivity(ctx.from.id);
 
     const text = ctx.message.text.replace('/edit', '').trim();
-    
     if (!text) {
         return ctx.reply(
-            `✏️ Matn tahrirlash:\n\n` +
-            `Misol:\n` +
-            `/edit Bu matnni qisqartir: Lorem ipsum dolor...\n` +
-            `/edit Bu matnni o'zbekchaga tarjima qil: Hello world`
+            `✏️ Matn yozing! ${randomEmoji('thinking')}\n\n` +
+            `Misol:\n/edit Bu matnni qisqartir: [matn]\n\n` +
+            `Yordam kerakmi? ${randomEmoji('happy')}`
         );
     }
 
     try {
         ctx.replyWithChatAction("typing");
-        const answer = await getAIResponse(ctx.from.id, `Quyidagi matnni tahrirlash kerak: ${text}`);
-        await sendLongMessage(ctx, answer);
+        const answer = await getAI(ctx.from.id, `Matnni tahrirla: ${text}`, ctx.from.first_name);
+        await sendLong(ctx, answer);
     } catch (err) {
-        console.error("Edit xatosi:", err);
-        ctx.reply("Tahrirlashda xatolik yuz berdi");
+        ctx.reply(`Xato! ${randomEmoji('sad')} Qayta urining!`);
     }
 });
 
-// Callback handler
-bot.action('check_subscription', async (ctx) => {
-    await ctx.answerCbQuery();
-    const isMember = await checkChannelMembership(ctx);
+bot.command('analyze', async (ctx) => {
+    if (!(await checkChannel(ctx))) return askSubscribe(ctx);
+    updateActivity(ctx.from.id);
     
-    if (isMember) {
-        ctx.reply(`✅ A'zolik tasdiqlandi!\n\nEndi botdan foydalanishingiz mumkin 😊`);
+    userMode[ctx.from.id] = 'analyze';
+    ctx.reply(`📄 Tahlil rejimi! ${randomEmoji('excited')}\n\nEndi fayl yuboring!`);
+});
+
+bot.action('check_sub', async (ctx) => {
+    await ctx.answerCbQuery();
+    const ok = await checkChannel(ctx);
+    
+    if (ok) {
+        updateActivity(ctx.from.id);
+        ctx.reply(`✅ Tasdiqlandi! ${randomEmoji('happy')}\n/start ni bosing!`);
     } else {
-        ctx.reply(`❌ Siz hali kanalga a'zo emassiz. Iltimos, avval a'zo bo'ling! 📢`);
+        ctx.reply(`❌ Hali a'zo emassiz ${randomEmoji('sad')}\nKanalga o'ting!`);
     }
 });
 
-// Oddiy matnli xabarlar
+// ======================== TEXT HANDLER ========================
 bot.on("text", async (ctx) => {
     if (ctx.message.text.startsWith("/")) return;
+    if (!(await checkChannel(ctx))) return askSubscribe(ctx);
 
-    const isMember = await checkChannelMembership(ctx);
-    if (!isMember) return sendSubscriptionRequired(ctx);
+    updateActivity(ctx.from.id);
 
-    const userId = ctx.from.id;
     const text = ctx.message.text;
+    const lower = text.toLowerCase();
+    const urls = getUrls(text);
+    const name = ctx.from.first_name || "Do'stim";
 
+    // Linklar
+    if (urls.length > 0) {
+        for (const url of urls) {
+            try {
+                if (url.includes('instagram.com')) {
+                    await ctx.reply(`📥 Instagram... ${randomEmoji('excited')}`);
+                    const link = await downloadInsta(url);
+                    if (link) {
+                        await ctx.replyWithVideo({ url: link }, { caption: `✅ Instagram! ${randomEmoji('happy')}` });
+                    } else {
+                        await ctx.reply(`Topilmadi ${randomEmoji('sad')}`);
+                    }
+                } else if (url.includes('tiktok.com')) {
+                    await ctx.reply(`📥 TikTok... ${randomEmoji('excited')}`);
+                    const link = await downloadTikTok(url);
+                    if (link) {
+                        await ctx.replyWithVideo({ url: link }, { caption: `✅ TikTok! ${randomEmoji('happy')}` });
+                    } else {
+                        await ctx.reply(`Topilmadi ${randomEmoji('sad')}`);
+                    }
+                } else if (url.includes('youtube.com') || url.includes('youtu.be')) {
+                    await ctx.reply(`📥 YouTube... ${randomEmoji('thinking')}`);
+                    const info = await ytdl.getInfo(url);
+                    const audio = ytdl.downloadFromInfo(info, { filter: 'audioonly' });
+                    await ctx.replyWithAudio({ source: audio }, { caption: `✅ YouTube! ${randomEmoji('happy')}` });
+                }
+            } catch (err) {
+                await ctx.reply(`Xato! ${randomEmoji('sad')}`);
+            }
+        }
+        return;
+    }
+
+    // Musiqa
+    if (lower.includes("qo'shiq") || lower.includes("musiqa")) {
+        const query = text.replace(/qo'shiq|musiqa|ber|ayt|top/gi, '').trim();
+        if (query.length > 2) return searchMusic(ctx, query);
+    }
+
+    // Oddiy suhbat
     try {
         ctx.replyWithChatAction("typing");
-        const answer = await getAIResponse(userId, text);
-        await sendLongMessage(ctx, answer);
+        const answer = await getAI(ctx.from.id, text, name);
+        await sendLong(ctx, answer);
+
+        // Ovozli javob
+        try {
+            const voice = await textToVoice(answer);
+            await ctx.replyWithVoice({ source: voice });
+            fs.unlinkSync(voice);
+        } catch (vErr) {
+            console.log("Ovoz xatosi:", vErr.message);
+        }
     } catch (err) {
-        console.error("Matn xatosi:", err);
-        ctx.reply("Xatolik yuz berdi. Qayta urinib ko'ring");
+        ctx.reply(`Xato! ${randomEmoji('sad')} Qayta yozing!`);
     }
 });
 
-// Rasm tahlili (Mistral Vision API)
+// ======================== PHOTO HANDLER ========================
 bot.on("photo", async (ctx) => {
-    const isMember = await checkChannelMembership(ctx);
-    if (!isMember) return sendSubscriptionRequired(ctx);
+    if (!(await checkChannel(ctx))) return askSubscribe(ctx);
+    updateActivity(ctx.from.id);
 
-    const userId = ctx.from.id;
     try {
+        await ctx.reply(`🖼 Ko'ryapman... ${randomEmoji('thinking')}`);
         ctx.replyWithChatAction("typing");
-
-        const photo = ctx.message.photo[ctx.message.photo.length - 1];
-        const fileLink = await ctx.telegram.getFileLink(photo.file_id);
         
-        const caption = ctx.message.caption || "Bu rasmni qisqacha tahlil qil va o'zbek tilida yoz";
+        const photo = ctx.message.photo[ctx.message.photo.length - 1];
+        const link = await ctx.telegram.getFileLink(photo.file_id);
+        const caption = ctx.message.caption || "Bu rasmni o'zbek tilida tahlil qil. Ko'p emoji ishlatib samimiy bo'l!";
 
-        // Mistral Vision API (Pixtral model) bilan ishlash
-        const response = await axios.post(
+        const res = await axios.post(
             "https://api.mistral.ai/v1/chat/completions",
             {
-                model: "pixtral-12b-2409", // Vision model
-                messages: [
-                    {
-                        role: "user",
-                        content: [
-                            { type: "text", text: caption },
-                            { type: "image_url", image_url: fileLink.href }
-                        ]
-                    }
-                ],
-                max_tokens: 250,
-                temperature: 0.3
+                model: "pixtral-12b-2409",
+                messages: [{
+                    role: "user",
+                    content: [
+                        { type: "text", text: caption },
+                        { type: "image_url", image_url: link.href }
+                    ]
+                }],
+                max_tokens: 400,
+                temperature: 0.7
             },
             {
                 headers: {
                     "Authorization": `Bearer ${MISTRAL_API_KEY}`,
                     "Content-Type": "application/json"
                 },
-                timeout: 20000 // 20 soniya
+                timeout: 25000
             }
         );
 
-        const answer = response.data.choices[0].message.content;
-        await sendLongMessage(ctx, answer);
-
+        const answer = res.data.choices[0].message.content;
+        await sendLong(ctx, `${answer}\n\n${randomEmoji('happy')} Yoqdimi?`);
     } catch (err) {
-        console.error("Rasm xatosi:", err?.response?.data || err.message);
-        ctx.reply("Rasmni tahlil qilishda muammo chiqdi 😔");
+        ctx.reply(`Xato! ${randomEmoji('sad')}`);
     }
 });
 
-// Fayl (PDF / DOCX) tahlili
+// ======================== DOCUMENT HANDLER ========================
 bot.on("document", async (ctx) => {
-    const isMember = await checkChannelMembership(ctx);
-    if (!isMember) return sendSubscriptionRequired(ctx);
+    if (!(await checkChannel(ctx))) return askSubscribe(ctx);
 
-    const userId = ctx.from.id;
     const doc = ctx.message.document;
+    const userId = ctx.from.id;
+    const name = ctx.from.first_name || "Do'stim";
+
+    updateActivity(userId);
 
     if (processingUsers.has(userId)) {
-        return ctx.reply("Oldingi fayl hali qayta ishlanmoqda... Bir oz kuting ⏳");
+        return ctx.reply(`Sabr qiling! ${randomEmoji('thinking')}`);
     }
 
     if (doc.file_size > 20 * 1024 * 1024) {
-        return ctx.reply(
-            `😔 Fayl hajmi 20 MB dan katta (${(doc.file_size / (1024*1024)).toFixed(1)} MB).\n\n` +
-            `Telegram cheklovi: 20 MB. Faylni kichikroq qilib yuboring 🔗`
-        );
+        return ctx.reply(`Katta! ${randomEmoji('sad')} 20 MB dan kichik yuboring!`);
     }
 
     processingUsers.add(userId);
-
+    
     try {
-        ctx.replyWithChatAction("typing");
-
+        await ctx.reply(`📄 O'qiyapman... ${randomEmoji('excited')}`);
+        
         const fileName = (doc.file_name || "").toLowerCase();
-        const fileLink = await ctx.telegram.getFileLink(doc.file_id);
+        const link = await ctx.telegram.getFileLink(doc.file_id);
+        const res = await axios.get(link.href, { responseType: "arraybuffer", timeout: 30000 });
+        const buffer = Buffer.from(res.data);
 
-        const response = await axios.get(fileLink.href, { responseType: "arraybuffer" });
-        const buffer = Buffer.from(response.data);
-
-        let extractedText = "";
+        let text = "";
 
         if (fileName.endsWith(".pdf")) {
-            const data = await pdf(buffer);
-            extractedText = data.text;
+            const data = await pdfParse(buffer);
+            text = data.text;
         } else if (fileName.endsWith(".docx")) {
             const result = await mammoth.extractRawText({ buffer });
-            extractedText = result.value;
+            text = result.value;
         } else {
-            return ctx.reply("Hozircha faqat .pdf va .docx fayllarni tahlil qila olaman 😅");
+            processingUsers.delete(userId);
+            return ctx.reply(`Faqat PDF va DOCX! ${randomEmoji('sad')}`);
         }
 
-        if (!extractedText.trim()) {
-            return ctx.reply("Fayldan matn chiqarib bo'lmadi");
+        if (!text.trim()) {
+            processingUsers.delete(userId);
+            return ctx.reply(`Bo'sh fayl! ${randomEmoji('sad')}`);
         }
 
-        const shortText = extractedText.slice(0, 4000);
-        const prompt = `Quyidagi fayl matnini o'zbek tilida QISQA tahlil qil (3-5 jumla). Faqat asosiy fikrlarni yoz:\n\n${shortText}`;
+        const short = text.slice(0, 6000);
+        const prompt = `${name} fayl yubordi. O'zbek tilida tahlil qil, ko'p emoji ishlatib samimiy bo'l:\n\n${short}`;
 
-        const answer = await getAIResponse(userId, prompt);
+        ctx.replyWithChatAction("typing");
+        const answer = await getAI(userId, prompt, name);
         
-        await ctx.reply(`📄 Fayl: ${doc.file_name}\n📊 Hajmi: ${(doc.file_size / 1024).toFixed(1)} KB\n\n${answer}`);
-
+        await ctx.reply(`📄 ${doc.file_name}\n${randomEmoji('happy')}\n\n${answer}`);
+        
     } catch (err) {
-        console.error("Fayl xatosi:", err);
-        ctx.reply("Faylni o'qishda xatolik yuz berdi 😔");
+        ctx.reply(`Xato! ${randomEmoji('sad')}`);
     } finally {
         processingUsers.delete(userId);
     }
 });
 
-// Botni ishga tushirish
-const app = express();
-const PORT = process.env.PORT || 3001; // 3000 dan 3001 ga o'zgardi
+// ======================== XATOLIK HANDLER ========================
+bot.catch((err, ctx) => {
+    console.error(`❌ Bot xatosi:`, err);
+    try {
+        ctx.reply(`Xato! ${randomEmoji('sad')} /start bosing!`);
+    } catch (e) {}
+});
 
-// Health check endpoint (Render uchun)
+// ======================== SERVER ========================
+const app = express();
+const PORT = process.env.PORT || 3001;
+
 app.get('/', (req, res) => {
-    res.send('Mentor.ai bot ishlayapti! 🚀');
+    res.send(`
+        <!DOCTYPE html>
+        <html><head><title>Mentor.ai</title>
+        <style>
+            body{font-family:Arial;background:linear-gradient(135deg,#667eea,#764ba2);
+            color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}
+            .box{text-align:center;padding:40px;background:rgba(255,255,255,.1);
+            border-radius:20px;backdrop-filter:blur(10px)}
+            h1{font-size:3em;margin:0}p{font-size:1.2em;margin:20px 0}
+            .ok{color:#4ade80;font-weight:bold;font-size:1.5em}
+        </style></head><body>
+        <div class="box">
+            <h1>🤖 Mentor.ai</h1>
+            <p class="ok">✅ Ishlayapti!</p>
+            <p>O'zbek tilidagi AI yordamchi</p>
+            <p>Black Rose | Akobir Norqulov</p>
+        </div></body></html>
+    `);
 });
 
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok', bot: 'running' });
+    res.json({ 
+        status: 'ok',
+        users: Object.keys(userLastActive).length,
+        scheduled: Object.keys(scheduledMessages).length
+    });
 });
 
-// HTTP server ishga tushirish
 app.listen(PORT, () => {
-    console.log(`HTTP server ${PORT} portda ishga tushdi`);
+    console.log(`
+╔═══════════════════════════╗
+║   🤖 MENTOR.AI ISHGA     ║
+║      TUSHDI! ✅          ║
+║                          ║
+║   Port: ${PORT}           ║
+║   Kanal: ${REQUIRED_CHANNEL}  ║
+╚═══════════════════════════╝
+    `);
 });
 
-// Telegram botni ishga tushirish
-bot.launch()
-    .then(() => console.log("Mentor.ai muvaffaqiyatli ishga tushdi! 🚀"))
-    .catch(err => console.error("Bot ishga tushmadi:", err));
+// ======================== LAUNCH ========================
+bot.launch().then(() => {
+    console.log("✅ Bot ishlayapti!");
+    console.log("🎤 Ovozli xabarlar tayyor!");
+    console.log("📱 Avtomatik xabarlar faol!");
+}).catch(err => {
+    console.error("❌ Ishga tushmadi:", err);
+    process.exit(1);
+});
 
-// Graceful shutdown (faqat polling uchun)
-if (!process.env.RENDER) {
-    process.once('SIGINT', () => bot.stop('SIGINT'));
-    process.once('SIGTERM', () => bot.stop('SIGTERM'));
-}
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
