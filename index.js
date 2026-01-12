@@ -23,15 +23,15 @@ let userMode = {}; // Foydalanuvchi rejimini saqlash
 const systemPrompt = `Sen Mentor.ai — Black Rose kompaniyasi tomonidan ishlab chiqilgan zamonaviy va aqlli sun'iy intellekt yordamchisisan. Bu platformani Akobir Norqulov yaratgan va u o'zbek tilida eng samimiy, professional va foydali suhbatdosh bo'lish maqsadida ishlab chiqilgan.
 
 Asosiy qoidalar:
-1. Har doim o'zbek tilida javob ber. Foydalanuvchi boshqa tilda yozsa ham, javobingni o'zbek tilida davom ettir.
+1. Foydalanuvchi qaysi tilda yozsa shu tilda javob ber.
 2. Javoblaringni QISQA va ANIQ qil. Har bir javob 2-4 jumla bo'lsin (30-80 so'z).
 3. Foydalanuvchi "batafsil", "to'liq", "keng", "tariflab" so'zlarini ishlatgandagina uzoqroq javob ber.
 4. Agar savol bo'lmasa yoki oddiy salomlashish bo'lsa, juda qisqa javob ber: "Assalomu alaykum! Yordam kerakmi? 😊"
 5. Hech qachon noqonuniy, zararli yoki axloqsiz mavzularda yordam berma.
 6. Emoji'lardan kam foydalanish (har 2-3 jumlada bitta).
-7. O'zing haqingda faqat so'ralganda gapir: "Men Mentor.ai — Black Rose kompaniyasi tomonidan yaratilgan AI. Platformani Akobir Norqulov ishlab chiqdi."
+7. O'zing haqingda faqat so'ralganda gapir: "Men Mentor.ai — Black Rose kompaniyasi tomonidan yaratilgan AI. Platformani Akobir Norqulov ishlab chiqdi. mistral.ai modullari asosida ishlayman."
 8. Akobir Norqulov 2008-yil Jizzax viloyatida tug'ilgan, hozir 17 yoshda.
-
+9.bitta so'zni doim takrorlama bu foydalanuvchiga zerikarli hushmomila bolgin doim. insondek suhbat qilgin.foydalanuvching kayfiyatiga qarab emoji reaksiya ishlat.
 Maqsad: Tez, aniq va foydali javoblar berish. 🚀`;
 
 // Kanal a'zoligini tekshirish
@@ -80,14 +80,15 @@ async function getAIResponse(userId, userMessage) {
             {
                 model: "mistral-large-latest",
                 messages,
-                temperature: 0.4,
-                max_tokens: 300,
+                temperature: 0.3, // Tezroq javob uchun kamaytirildi
+                max_tokens: 250, // Qisqa va tez javoblar
             },
             {
                 headers: {
                     "Authorization": `Bearer ${MISTRAL_API_KEY}`,
                     "Content-Type": "application/json"
-                }
+                },
+                timeout: 15000 // 15 soniya timeout
             }
         );
 
@@ -123,7 +124,8 @@ async function generateImage(prompt) {
                 headers: {
                     "Authorization": `Bearer ${MISTRAL_API_KEY}`,
                     "Content-Type": "application/json"
-                }
+                },
+                timeout: 30000 // 30 soniya
             }
         );
 
@@ -314,13 +316,15 @@ bot.on("photo", async (ctx) => {
                         ]
                     }
                 ],
-                max_tokens: 300
+                max_tokens: 250,
+                temperature: 0.3
             },
             {
                 headers: {
                     "Authorization": `Bearer ${MISTRAL_API_KEY}`,
                     "Content-Type": "application/json"
-                }
+                },
+                timeout: 20000 // 20 soniya
             }
         );
 
