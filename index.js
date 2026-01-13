@@ -297,8 +297,8 @@ bot.start(async (ctx) => {
       `Salom ${ctx.from.first_name}! 👋\n\n` +
       `Men universal AI yordamchiman. Sizga qanday yordam bera olaman:\n\n` +
       `✅ Savolga javob berish\n` +
-      `✅ Matematik masala yechish\n` +
-      `✅ Kod yozish va tushuntirish\n` +
+      `✅ Chet tillarini o'rganish \n` +
+      `✅ Writing yozish IELTS tasklariga\n` +
       `✅ Rasm tahlil qilish\n` +
       `✅ Yozuv tekshirish va baholash\n` +
       `✅ PDF/DOCX o'qish va tahrirlash\n` +
