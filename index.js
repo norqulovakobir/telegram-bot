@@ -32,6 +32,21 @@ app.use(express.json());
 axios.defaults.timeout = 60000;
 
 /* =========================
+   UZUN JAVOBLarni QISMLARGA BO'LIB YUBORISH
+========================= */
+async function sendLongReply(ctx, text) {
+  const chunkSize = 4000;
+  for (let i = 0; i < text.length; i += chunkSize) {
+    const chunk = text.slice(i, i + chunkSize);
+    try {
+      await ctx.reply(chunk, { parse_mode: 'Markdown' });
+    } catch (e) {
+      await ctx.reply(chunk); // Agar Markdown xato bersa, oddiy text
+    }
+  }
+}
+
+/* =========================
    XOTIRA
 ========================= */
 const memory = {};
@@ -223,7 +238,7 @@ bot.action('check_sub', async (ctx) => {
 /* =========================
    AI API
 ========================= */
-async function callAI(messages, retries = 2) {
+async function callAI(messages, retries = 3) {
   // 1. Mistral
   if (MISTRAL_API_KEY) {
     for (let i = 0; i < retries; i++) {
@@ -234,23 +249,23 @@ async function callAI(messages, retries = 2) {
             model: 'mistral-large-latest',
             messages,
             temperature: 0.7,
-            max_tokens: 2000
+            max_tokens: 4000
           },
           { 
             headers: { 
               'Authorization': `Bearer ${MISTRAL_API_KEY}`,
               'Content-Type': 'application/json'
             },
-            timeout: 45000
+            timeout: 60000
           }
         );
 
         if (res.data?.choices?.[0]?.message?.content) {
-          return { success: true, content: res.data.choices[0].message.content, provider: 'Mistral' };
+          return { success: true, content: res.data.choices[0].message.content.trim(), provider: 'Mistral' };
         }
       } catch (error) {
         console.error(`Mistral urinish ${i + 1}: ${error.response?.data?.message || error.message}`);
-        if (i < retries - 1) await new Promise(r => setTimeout(r, 2000));
+        if (i < retries - 1) await new Promise(r => setTimeout(r, 3000));
       }
     }
   }
@@ -261,8 +276,9 @@ async function callAI(messages, retries = 2) {
       const res = await axios.post(
         'https://openrouter.ai/api/v1/chat/completions',
         {
-          model: 'google/gemini-flash-1.5-8b',
-          messages
+          model: 'google/gemini-1.5-flash',
+          messages,
+          max_tokens: 4000
         },
         { 
           headers: { 
@@ -271,12 +287,12 @@ async function callAI(messages, retries = 2) {
             'HTTP-Referer': 'https://t.me/your_bot',
             'X-Title': 'Mentor AI Bot'
           },
-          timeout: 45000
+          timeout: 60000
         }
       );
 
       if (res.data?.choices?.[0]?.message?.content) {
-        return { success: true, content: res.data.choices[0].message.content, provider: 'OpenRouter' };
+        return { success: true, content: res.data.choices[0].message.content.trim(), provider: 'OpenRouter' };
       }
     } catch (error) {
       console.error('OpenRouter xato:', error.message);
@@ -388,7 +404,7 @@ bot.on('photo', async (ctx) => {
           }
         ],
         temperature: 0.7,
-        max_tokens: 2000
+        max_tokens: 4000
       },
       { 
         headers: { 
@@ -400,7 +416,7 @@ bot.on('photo', async (ctx) => {
     );
 
     const reply = res.data.choices[0].message.content;
-    await ctx.reply(reply);
+    await sendLongReply(ctx, reply);
     resetUserActivity(ctx.chat.id);
   } catch (e) {
     console.error('Rasm tahlil xatosi:', e.response?.data || e.message);
@@ -448,6 +464,11 @@ bot.on('document', async (ctx) => {
       return ctx.reply('⚠️ Faylda matn topilmadi');
     }
 
+    const truncatedText = text.slice(0, 40000);
+    if (text.length > 40000) {
+      await ctx.reply('⚠️ Fayl juda uzun, faqat birinchi 40 000 belgisi tahlil qilinadi.');
+    }
+
     const dateTime = getRealDateTime();
     const systemWithTime = SYSTEM_PROMPT.replace('{{CURRENT_DATETIME}}', dateTime.full);
 
@@ -457,7 +478,7 @@ bot.on('document', async (ctx) => {
       { role: 'system', content: systemWithTime },
       {
         role: 'user',
-        content: `${userInstruction}\n\nHujjat matni:\n\n${text.slice(0, 30000)}`
+        content: `${userInstruction}\n\nHujjat matni:\n\n${truncatedText}`
       }
     ];
 
@@ -468,7 +489,7 @@ bot.on('document', async (ctx) => {
     }
 
     console.log(`✅ Fayl tahlili: ${result.provider}`);
-    await ctx.reply(result.content);
+    await sendLongReply(ctx, result.content);
     resetUserActivity(ctx.chat.id);
   } catch (e) {
     console.error('Fayl xatosi:', e.response?.data || e.message);
@@ -528,7 +549,7 @@ bot.on('text', async (ctx) => {
       memory[userId] = memory[userId].slice(-20);
     }
 
-    await ctx.reply(reply);
+    await sendLongReply(ctx, reply);
     resetUserActivity(ctx.chat.id);
   } catch (e) {
     console.error('Suhbat xatosi:', e.message);
@@ -612,7 +633,6 @@ app.get('/health', (req, res) => {
 async function startBot() {
   try {
     if (RENDER_EXTERNAL_URL) {
-      // RENDER UCHUN WEBHOOK
       const path = `/bot${BOT_TOKEN}`;
       const webhookUrl = `${RENDER_EXTERNAL_URL}${path}`;
       
@@ -635,7 +655,6 @@ async function startBot() {
       
       console.log('✅ Bot ishga tushdi (Webhook)');
     } else {
-      // LOKAL UCHUN POLLING
       await bot.telegram.deleteWebhook({ drop_pending_updates: true });
       console.log('🔄 Webhook o\'chirildi');
       
